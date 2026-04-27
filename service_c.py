@@ -180,11 +180,16 @@ def forward():
             return jsonify({'forwarded_to': intermediary_url, 'status': r.status_code, 'response': r.json()})
         except Exception as e:
             return jsonify({'error': str(e)}), 500
-    # Otherwise, forward directly
+    # Otherwise, forward directly (always include edgeToggles for next hop)
     if not target:
         return jsonify({'error': 'no target provided to forward to'}), 400
     try:
-        r = requests.post(target, json=payload, timeout=5)
+        r = requests.post(target, json={
+            'target': None,
+            'recipient': recipient,
+            'payload': payload,
+            'edgeToggles': edgeToggles
+        }, timeout=5)
         return jsonify({'forwarded_to': target, 'status': r.status_code, 'response': r.json()})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
