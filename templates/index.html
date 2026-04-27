@@ -39,16 +39,16 @@
       </div>
       <label for="origin">Origin:</label>
       <select id="origin" name="origin">
-        <option value="http://localhost:5000">GUI (5000)</option>
-        <option value="http://localhost:5001">Service B (5001)</option>
-        <option value="http://localhost:5002">Service C (5002)</option>
+        <option value="http://{{ gui_ip }}:5000">GUI (5000)</option>
+        <option value="http://{{ b_ip }}:5001">Service B (5001)</option>
+        <option value="http://{{ c_ip }}:5002">Service C (5002)</option>
       </select>
       <br/>
       <label for="target">Target:</label>
       <select id="target" name="target">
-        <option value="http://localhost:5000/receive">Self (5000)</option>
-        <option value="http://localhost:5001/receive">Service B (5001)</option>
-        <option value="http://localhost:5002/receive">Service C (5002)</option>
+        <option value="http://{{ gui_ip }}:5000/receive">Self (5000)</option>
+        <option value="http://{{ b_ip }}:5001/receive">Service B (5001)</option>
+        <option value="http://{{ c_ip }}:5002/receive">Service C (5002)</option>
       </select>
       <br/>
       <fieldset>
@@ -171,8 +171,8 @@
             const originForward = origin + '/forward';
 
             // send envelope, animate path concurrently
-            const originName = (origin.includes('5001')? 'B': (origin.includes('5002')? 'C': 'GUI'));
-            const targetName = (targetValue.includes('5001')? 'B': (targetValue.includes('5002')? 'C': 'GUI'));
+            const originName = (origin.includes('{{ b_ip }}')? 'B': (origin.includes('{{ c_ip }}')? 'C': 'GUI'));
+            const targetName = (targetValue.includes('{{ b_ip }}')? 'B': (targetValue.includes('{{ c_ip }}')? 'C': 'GUI'));
             const sendBtn = document.getElementById('sendBtn');
             try{
               // show sent state until response arrives
@@ -283,11 +283,11 @@
       }
       async function triggerMotor(action, speed) {
           const payload = { "motor": action, "speed": speed };
-          const envelope = {
-              "target": "http://localhost:5001/receive", // Change localhost to Service B's IP if needed
+            const envelope = {
+              "target": "http://{{ b_ip }}:5001/receive", // Uses .env IP for Service B
               "recipient": "B",
               "payload": payload
-          };
+            };
 
           // Use the GUI's own forwarder to send it
           fetch('/forward', {

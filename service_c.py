@@ -1,3 +1,4 @@
+
 import argparse
 import threading
 import queue
@@ -6,12 +7,18 @@ import requests
 import time
 from flask import Flask, request, jsonify
 from flask_cors import CORS
+import os
+from dotenv import load_dotenv
 
 try:
     import serial
 except ImportError:
     serial = None
 
+
+load_dotenv()
+SERVICE_C_IP = os.getenv('SERVICE_C_IP', '127.0.0.1')
+SERVICE_GUI_IP = os.getenv('SERVICE_GUI_IP', '127.0.0.1')
 app = Flask(__name__)
 CORS(app)
 
@@ -19,10 +26,13 @@ CORS(app)
 serial_controller = None
 
 class SerialController:
-    def __init__(self, port, baud=115200, gui_url="http://localhost:5000/receive"):
+    def __init__(self, port, baud=115200, gui_url=None):
         self.port = port
         self.baud = int(baud)
-        self.gui_url = gui_url
+        if gui_url is None:
+            self.gui_url = f"http://{SERVICE_GUI_IP}:5000/receive"
+        else:
+            self.gui_url = gui_url
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._worker, daemon=True)
         self._thread.start()
@@ -103,8 +113,7 @@ def main():
     parser.add_argument('--serve', action='store_true', help='Start Service C server')
     parser.add_argument('--serial-port', help='Serial port for Sensor ESP32 (e.g. COM10)')
     parser.add_argument('--baud', default=115200, help='Baud rate')
-    # Add an argument for the GUI IP if it's on a different machine
-    parser.add_argument('--gui-url', default="http://localhost:5000/receive", help='URL of the GUI receiver')
+    parser.add_argument('--gui-url', default=None, help='URL of the GUI receiver (overrides .env)')
     args = parser.parse_args()
 
     if args.serve:
@@ -112,9 +121,8 @@ def main():
             serial_controller = SerialController(args.serial_port, args.baud, args.gui_url)
         else:
             print("Running in Network-Only mode (No Serial).")
-            
-        print("Starting Service C on Port 5002...")
-        app.run(host='0.0.0.0', port=5002, debug=False)
+        print(f"Starting Service C on {SERVICE_C_IP}:5002...")
+        app.run(host=SERVICE_C_IP, port=5002, debug=False)
 
 if __name__ == '__main__':
     main()

@@ -1,3 +1,4 @@
+
 import argparse
 import threading
 import queue
@@ -7,11 +8,16 @@ import json
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import time
+import os
+from dotenv import load_dotenv
 try:
     import serial
 except ImportError:
     serial = None
 
+
+load_dotenv()
+SERVICE_B_IP = os.getenv('SERVICE_B_IP', '127.0.0.1')
 app = Flask(__name__)
 CORS(app)
 
@@ -140,9 +146,9 @@ def main():
         else:
             print("Warning: No serial port provided. Motor commands will be logged but not sent.")
             
-        print("Starting Service B on Port 5001...")
-        # host='0.0.0.0' allows other machines on the network to connect
-        app.run(host='0.0.0.0', port=5001, debug=False) 
+        print(f"Starting Service B on {SERVICE_B_IP}:5001...")
+        # host=SERVICE_B_IP allows other machines on the network to connect if set in .env
+        app.run(host=SERVICE_B_IP, port=5001, debug=False)
 
 if __name__ == '__main__':
     main()
