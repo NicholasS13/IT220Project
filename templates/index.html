@@ -93,6 +93,13 @@
         try{ body = JSON.parse(payloadText); }
         catch(e){ document.getElementById('result').textContent = 'Invalid JSON'; return; }
 
+        // Collect edge toggle states
+        const edgeToggles = {
+          gui_c: document.getElementById('toggle_gui_c').checked,
+          gui_b: document.getElementById('toggle_gui_b').checked,
+          b_c: document.getElementById('toggle_b_c').checked
+        };
+
         try{
           // Determine routing based on Origin, Target, and Via selection
             const origin = document.getElementById('origin').value; // base URL
@@ -165,7 +172,7 @@
 
             // Build final envelope(s)
             const finalRecipient = recipientNameFromUrl(targetValue);
-            const envelope = { target: targetValue, recipient: finalRecipient, payload: body };
+            const envelope = { target: targetValue, recipient: finalRecipient, payload: body, edgeToggles: edgeToggles };
 
             // Determine origin forward URL
             const originForward = origin + '/forward';
@@ -227,7 +234,7 @@
             console.log({ origin, originName, targetValue, targetName, via, intermediary, envelope });
 
             // outer envelope tells origin to forward to intermediary, carrying the inner envelope
-            const outer = { target: intermediary, recipient: finalRecipient, payload: envelope };
+            const outer = { target: intermediary, recipient: finalRecipient, payload: envelope, edgeToggles: edgeToggles };
             // fire fetch while animation runs
             const fetchPromise = fetch(originForward, {
               method: 'POST',
@@ -282,22 +289,28 @@
           }
       }
       async function triggerMotor(action, speed) {
-          const payload = { "motor": action, "speed": speed };
-            const envelope = {
-              "target": "http://{{ b_ip }}:5001/receive", // Uses .env IP for Service B
-              "recipient": "B",
-              "payload": payload
-            };
-
-          // Use the GUI's own forwarder to send it
-          fetch('/forward', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify(envelope)
-          })
-          .then(r => r.json())
-          .then(data => console.log("Motor Command Sent:", data))
-          .catch(err => console.error("Error:", err));
+        const payload = { "motor": action, "speed": speed };
+        // Collect edge toggle states
+        const edgeToggles = {
+          gui_c: document.getElementById('toggle_gui_c').checked,
+          gui_b: document.getElementById('toggle_gui_b').checked,
+          b_c: document.getElementById('toggle_b_c').checked
+        };
+        const envelope = {
+          "target": "http://{{ b_ip }}:5001/receive", // Uses .env IP for Service B
+          "recipient": "B",
+          "payload": payload,
+          edgeToggles: edgeToggles
+        };
+        // Use the GUI's own forwarder to send it
+        fetch('/forward', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(envelope)
+        })
+        .then(r => r.json())
+        .then(data => console.log("Motor Command Sent:", data))
+        .catch(err => console.error("Error:", err));
       }
       // Start polling every 1000ms (1 second)
       setInterval(pollIncomingData, 1000);
