@@ -1,0 +1,375 @@
+from flask import Flask, request, jsonify, render_template_string, render_template
+from flask_cors import CORS
+import datetime
+import requests
+
+app = Flask(__name__)
+# Enable CORS globally so JS can call /forward and /receive without preflight blocking
+CORS(app)
+
+HTML = """
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <title>Service GUI</title>
+  </head>
+  <body>
+    <h2>Service GUI (port 5000)</h2>
+    <form id="postForm">
+      <style>
+        .triangle { width: 360px; height: 320px; }
+        .node-label { font: 14px sans-serif; }
+        .edge-toggle { margin-left: 8px; }
+      </style>
+      <div style="display:flex; gap:24px; align-items:flex-start;">
+        <svg class="triangle" viewBox="0 0 300 260" xmlns="http://www.w3.org/2000/svg">
+          <!-- triangle points: top=GUI, left=B, right=C -->
+          <polygon points="150,20 40,220 260,220" fill="#f8f8f8" stroke="#333" stroke-width="2" />
+          <!-- edges -->
+          <line id="edge_gui_b" x1="150" y1="20" x2="40" y2="220" stroke="#007acc" stroke-width="4" />
+          <line id="edge_gui_c" x1="150" y1="20" x2="260" y2="220" stroke="#007acc" stroke-width="4" />
+          <line id="edge_b_c" x1="40" y1="220" x2="260" y2="220" stroke="#007acc" stroke-width="4" />
+          <!-- nodes -->
+          <circle cx="150" cy="20" r="18" fill="#fff" stroke="#333" />
+          <text x="150" y="25" text-anchor="middle" class="node-label">GUI</text>
+          <circle cx="40" cy="220" r="18" fill="#fff" stroke="#333" />
+          <text x="40" y="225" text-anchor="middle" class="node-label">B</text>
+          <circle cx="260" cy="220" r="18" fill="#fff" stroke="#333" />
+          <text x="260" y="225" text-anchor="middle" class="node-label">C</text>
+          <!-- moving message marker -->
+          <circle id="msgDot" cx="-10" cy="-10" r="6" fill="#ff9900" opacity="0" />
+        </svg>
+        <div>
+          <div><strong>Edges (toggle to disable direct link)</strong></div>
+          <div><label><input id="toggle_gui_c" class="edge-toggle" type="checkbox" checked> GUI ↔ C</label></div>
+          <div><label><input id="toggle_gui_b" class="edge-toggle" type="checkbox" checked> GUI ↔ B</label></div>
+          <div><label><input id="toggle_b_c" class="edge-toggle" type="checkbox" checked> B ↔ C</label></div>
+        </div>
+      </div>
+      <label for="origin">Origin:</label>
+      <select id="origin" name="origin">
+        <option value="http://localhost:5000">GUI (5000)</option>
+        <option value="http://localhost:5001">Service B (5001)</option>
+        <option value="http://localhost:5002">Service C (5002)</option>
+      </select>
+      <br/>
+      <label for="target">Target:</label>
+      <select id="target" name="target">
+        <option value="http://localhost:5000/receive">Self (5000)</option>
+        <option value="http://localhost:5001/receive">Service B (5001)</option>
+        <option value="http://localhost:5002/receive">Service C (5002)</option>
+      </select>
+      <br/>
+      <fieldset>
+        <legend>Routing rules</legend>
+        <label>General routing (when sending):</label>
+        <select id="via" name="via">
+          <option value="auto" selected>Auto (use direct if enabled, otherwise route via third node)</option>
+          <option value="via_gui">Via GUI</option>
+          <option value="via_b">Via B</option>
+          <option value="via_c">Via C</option>
+        </select>
+      </fieldset>
+      <label for="payload">JSON payload:</label>
+      <br/>
+      <textarea id="payload" rows="6" cols="60">{ "msg": "Hello from GUI" }</textarea>
+      <br/>
+      <button id="sendBtn" type="button" onclick="sendPost()">Send POST</button>
+    </form>
+    <div style="margin-top: 20px; padding: 15px; background: #eee; border-radius: 8px;">
+        <strong>Hardware Controls (Service B)</strong><br/><br/>
+        <button type="button" onclick="triggerMotor('start', 255)" style="background: #28a745; color: white; padding: 10px;">Full Forward</button>
+        <button type="button" onclick="triggerMotor('start', 0)" style="background: #dc3545; color: white; padding: 10px;">Full Reverse</button>
+        <button type="button" onclick="triggerMotor('stop', 0)" style="background: #6c757d; color: white; padding: 10px;">Emergency Stop</button>
+    </div>
+    <h3>Response</h3>
+    <pre id="result">(no response yet)</pre>
+    <h3>Live Device Status</h3>
+    <div style="display: flex; gap: 20px;">
+        <div id="sensor-val" style="font-size: 24px; padding: 10px; border: 1px solid #ccc;">
+            Sensor: --
+        </div>
+        <div id="button-status" style="font-size: 24px; padding: 10px; border: 1px solid #ccc; transition: 0.3s;">
+            Button: --
+        </div>
+    </div>
+
+    <script>
+      async function sendPost(){
+        const target = document.getElementById('target').value;
+        let payloadText = document.getElementById('payload').value;
+        let body;
+        try{ body = JSON.parse(payloadText); }
+        catch(e){ document.getElementById('result').textContent = 'Invalid JSON'; return; }
+
+        try{
+          // Determine routing based on Origin, Target, and Via selection
+            const origin = document.getElementById('origin').value; // base URL
+            const targetValue = document.getElementById('target').value; // full receive URL
+            let via = document.getElementById('via').value;
+
+            // check edge toggles; if direct edge disabled, force via third node
+            function directEdgeEnabled(aName, bName){
+              // aName/bName are 'GUI','B','C'
+              if ((aName === 'GUI' && bName === 'C') || (aName === 'C' && bName === 'GUI')) return document.getElementById('toggle_gui_c').checked;
+              if ((aName === 'GUI' && bName === 'B') || (aName === 'B' && bName === 'GUI')) return document.getElementById('toggle_gui_b').checked;
+              if ((aName === 'B' && bName === 'C') || (aName === 'C' && bName === 'B')) return document.getElementById('toggle_b_c').checked;
+              return true;
+            }
+
+            // Helper to pick recipient short name from target URL
+            function recipientNameFromUrl(url){
+              if (url.includes('5001')) return 'B';
+              if (url.includes('5002')) return 'C';
+              return 'GUI';
+            }
+
+            // Animate an edge: highlight it and move msgDot along it
+            function animateEdge(edgeId){
+              return new Promise((resolve)=>{
+                const edge = document.getElementById(edgeId);
+                const dot = document.getElementById('msgDot');
+                const x1 = parseFloat(edge.getAttribute('x1'));
+                const y1 = parseFloat(edge.getAttribute('y1'));
+                const x2 = parseFloat(edge.getAttribute('x2'));
+                const y2 = parseFloat(edge.getAttribute('y2'));
+                const duration = 600; // ms
+                const steps = 30;
+                dot.setAttribute('opacity', 1);
+                edge.setAttribute('stroke', '#ff9900');
+                let i = 0;
+                const iv = setInterval(()=>{
+                  const t = ++i / steps;
+                  const cx = x1 + (x2-x1)*t;
+                  const cy = y1 + (y2-y1)*t;
+                  dot.setAttribute('cx', cx);
+                  dot.setAttribute('cy', cy);
+                  if(i>=steps){
+                    clearInterval(iv);
+                    // restore edge color based on toggle
+                    updateEdgeColors();
+                    dot.setAttribute('opacity', 0);
+                    resolve();
+                  }
+                }, duration/steps);
+              });
+            }
+
+            // Update edge colors to reflect enabled/disabled state
+            function updateEdgeColors(){
+              const e_gui_c = document.getElementById('edge_gui_c');
+              const e_gui_b = document.getElementById('edge_gui_b');
+              const e_b_c = document.getElementById('edge_b_c');
+              e_gui_c.setAttribute('stroke', document.getElementById('toggle_gui_c').checked ? '#007acc' : '#cc0000');
+              e_gui_b.setAttribute('stroke', document.getElementById('toggle_gui_b').checked ? '#007acc' : '#cc0000');
+              e_b_c.setAttribute('stroke', document.getElementById('toggle_b_c').checked ? '#007acc' : '#cc0000');
+            }
+
+            // wire up toggles to update colors
+            document.getElementById('toggle_gui_c').addEventListener('change', updateEdgeColors);
+            document.getElementById('toggle_gui_b').addEventListener('change', updateEdgeColors);
+            document.getElementById('toggle_b_c').addEventListener('change', updateEdgeColors);
+            // initial color update
+            updateEdgeColors();
+
+            // Build final envelope(s)
+            const finalRecipient = recipientNameFromUrl(targetValue);
+            const envelope = { target: targetValue, recipient: finalRecipient, payload: body };
+
+            // Determine origin forward URL
+            const originForward = origin + '/forward';
+
+            // send envelope, animate path concurrently
+            const originName = (origin.includes('5001')? 'B': (origin.includes('5002')? 'C': 'GUI'));
+            const targetName = (targetValue.includes('5001')? 'B': (targetValue.includes('5002')? 'C': 'GUI'));
+            const sendBtn = document.getElementById('sendBtn');
+            try{
+              // show sent state until response arrives
+              sendBtn.disabled = true;
+              sendBtn.textContent = 'Message sent...';
+
+              // decide route: if auto, pick direct if available else pick the remaining node as intermediary
+              if (via === 'auto'){
+                if (directEdgeEnabled(originName, targetName)){
+                  via = 'via_direct';
+                } else {
+                  const nodes = ['GUI','B','C'];
+                  const intermediaryName = nodes.filter(n=> n!==originName && n!==targetName)[0];
+                  via = (intermediaryName === 'GUI')? 'via_gui' : (intermediaryName === 'B'? 'via_b' : 'via_c');
+                }
+              }
+
+              // Build animation sequence of edges to highlight
+              const edgeMap = { 'GUI-B': 'edge_gui_b', 'GUI-C': 'edge_gui_c', 'B-C': 'edge_b_c' };
+              let animateSeq = [];
+              if (via === 'via_direct'){
+                // direct edge
+                if (originName==='GUI' && targetName==='B') animateSeq.push(edgeMap['GUI-B']);
+                if (originName==='GUI' && targetName==='C') animateSeq.push(edgeMap['GUI-C']);
+                if (originName==='B' && targetName==='C') animateSeq.push(edgeMap['B-C']);
+                if (originName==='C' && targetName==='B') animateSeq.push(edgeMap['B-C']);
+              } else if (via.startsWith('via_')){
+                // e.g. origin -> intermediary -> target
+                const interName = (via==='via_gui')? 'GUI' : (via==='via_b')? 'B' : 'C';
+                // origin -> inter
+                if ((originName==='GUI'&&interName==='B')||(originName==='B'&&interName==='GUI')) animateSeq.push(edgeMap['GUI-B']);
+                if ((originName==='GUI'&&interName==='C')||(originName==='C'&&interName==='GUI')) animateSeq.push(edgeMap['GUI-C']);
+                if ((originName==='B'&&interName==='C')||(originName==='C'&&interName==='B')) animateSeq.push(edgeMap['B-C']);
+                // inter -> target
+                if ((interName==='GUI'&&targetName==='B')||(interName==='B'&&targetName==='GUI')) animateSeq.push(edgeMap['GUI-B']);
+                if ((interName==='GUI'&&targetName==='C')||(interName==='C'&&targetName==='GUI')) animateSeq.push(edgeMap['GUI-C']);
+                if ((interName==='B'&&targetName==='C')||(interName==='C'&&targetName==='B')) animateSeq.push(edgeMap['B-C']);
+              }
+
+              // start animation (don't await) but collect promise to await optionally
+              const animPromises = animateSeq.map(eid => animateEdge(eid));
+
+            // choose intermediary/outer-target based on via. For direct, outer target is the final receive URL
+            let intermediary = null;
+            if (via === 'via_direct') intermediary = targetValue;
+            if (via === 'via_gui') intermediary = 'http://localhost:5000/forward';
+            if (via === 'via_b') intermediary = 'http://localhost:5001/forward';
+            if (via === 'via_c') intermediary = 'http://localhost:5002/forward';
+            if (!intermediary){ document.getElementById('result').textContent = 'Invalid via'; return; }
+
+            // debug info for troubleshooting routing
+            console.log({ origin, originName, targetValue, targetName, via, intermediary, envelope });
+
+            // outer envelope tells origin to forward to intermediary, carrying the inner envelope
+            const outer = { target: intermediary, recipient: finalRecipient, payload: envelope };
+            // fire fetch while animation runs
+            const fetchPromise = fetch(originForward, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(outer)
+            }).then(r=>r.json().catch(()=>({text:'no-json'})));
+
+            // await both animation and fetch (animations started earlier)
+            try{
+              const results = await Promise.all([fetchPromise, Promise.all(animPromises)]);
+              const data = results[0];
+              document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+            }catch(err){
+              document.getElementById('result').textContent = 'Fetch error: '+err;
+            }
+          }catch(err){
+            document.getElementById('result').textContent = 'Fetch error: '+err;
+          }finally{
+            // restore button state
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = false;
+            sendBtn.textContent = 'Send POST';
+          }
+        }catch(err){
+          document.getElementById('result').textContent = 'Fetch error: '+err;
+        }
+      }
+      async function pollIncomingData() {
+          try {
+              const response = await fetch('/get_latest');
+              const data = await response.json();
+              
+              // Debugging: Right-click page -> Inspect -> Console to see this
+              console.log("Browser Polled Data:", data);
+            
+              if (data && data.raw) {
+                  // Update Sensor Display
+                  const sensorVal = data.raw.split('|')[0].replace('Analog:', '').trim();
+                  document.getElementById('sensor-val').textContent = "Sensor: " + sensorVal;
+                  
+                  // Update Button Display
+                  const btnBox = document.getElementById('button-status');
+                  const status = data.button || "OFF";
+                  btnBox.textContent = "Button: " + status;
+                  
+                  // Visual Feedback: Red for pressed, Grey for released
+                  btnBox.style.backgroundColor = (status === "ON") ? "#ff4444" : "#eeeeee";
+                  btnBox.style.color = (status === "ON") ? "white" : "black";
+              }
+          } catch (err) {
+              console.error("Polling error:", err);
+          }
+      }
+      async function triggerMotor(action, speed) {
+          const payload = { "motor": action, "speed": speed };
+          const envelope = {
+              "target": "http://localhost:5001/receive", // Change localhost to Service B's IP if needed
+              "recipient": "B",
+              "payload": payload
+          };
+
+          // Use the GUI's own forwarder to send it
+          fetch('/forward', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(envelope)
+          })
+          .then(r => r.json())
+          .then(data => console.log("Motor Command Sent:", data))
+          .catch(err => console.error("Error:", err));
+      }
+      // Start polling every 1000ms (1 second)
+      setInterval(pollIncomingData, 1000);
+    </script>
+  </body>
+</html>
+"""
+latest_received_data = {"msg": "Waiting for data..."}
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+    #return render_template_string(HTML)
+
+@app.route('/get_latest')
+def get_latest():
+    global latest_received_data
+    print("Get LATEST WAS RUNNED")
+    return jsonify(latest_received_data)
+
+@app.route('/receive', methods=['POST'])
+def receive():
+  global latest_received_data
+  data = request.get_json(silent=True)
+  # Log received payload to terminal for visibility
+  print('Received POST on GUI /receive:', data)
+  latest_received_data = data
+    
+  return jsonify({"status": "ok"})
+
+
+@app.route('/forward', methods=['POST'])
+def forward():
+  data = request.get_json(silent=True) or {}
+  target = data.get('target')
+  recipient = data.get('recipient')
+  payload = data.get('payload')
+  if recipient is None or payload is None:
+    return jsonify({'error': 'missing recipient or payload'}), 400
+
+  print('Forward envelope received on GUI:', {'recipient': recipient, 'payload': payload, 'target': target})
+
+  # If intended for GUI process locally
+  if str(recipient).lower() in ('gui', 'servicegui', 'service_gui'):
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    processed = {'service': 'GUI', 'timestamp': now, 'received': payload}
+    print('GUI processing payload locally:', payload)
+    return jsonify({'processed': processed}), 200
+
+  # Otherwise forward to target
+  if not target:
+    return jsonify({'error': 'no target provided to forward to'}), 400
+  try:
+    r = requests.post(target, json=payload, timeout=5)
+    try:
+      resp_json = r.json()
+    except Exception:
+      resp_json = {'text': r.text}
+    return jsonify({'forwarded_to': target, 'status': r.status_code, 'response': resp_json})
+  except Exception as e:
+    return jsonify({'error': str(e)}), 500
+
+
+if __name__ == '__main__':
+    app.run(port=5000, debug=True)
