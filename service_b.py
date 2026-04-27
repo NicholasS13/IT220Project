@@ -18,6 +18,7 @@ except ImportError:
 
 load_dotenv()
 SERVICE_B_IP = os.getenv('SERVICE_B_IP', '127.0.0.1')
+SERVICE_C_IP = os.getenv('SERVICE_C_IP', '127.0.0.1')
 app = Flask(__name__)
 CORS(app)
 
@@ -97,10 +98,13 @@ def process_motor_logic(data):
 def receive():
     data = request.get_json(silent=True) or {}
     print('Received POST on Service B /receive:', data)
-    
-    # Check for motor commands in the direct payload
-    process_motor_logic(data)
-    
+
+    # Unwrap if forwarded envelope (has 'payload' key)
+    if 'payload' in data and isinstance(data['payload'], dict):
+        process_motor_logic(data['payload'])
+    else:
+        process_motor_logic(data)
+
     now = datetime.datetime.now(datetime.timezone.utc).isoformat()
     return jsonify({'service': 'B', 'timestamp': now, 'received': data})
 

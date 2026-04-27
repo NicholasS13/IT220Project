@@ -16,9 +16,11 @@ except ImportError:
     serial = None
 
 
+
 load_dotenv()
 SERVICE_C_IP = os.getenv('SERVICE_C_IP', '127.0.0.1')
 SERVICE_GUI_IP = os.getenv('SERVICE_GUI_IP', '127.0.0.1')
+SERVICE_B_IP = os.getenv('SERVICE_B_IP', '127.0.0.1')
 app = Flask(__name__)
 CORS(app)
 
